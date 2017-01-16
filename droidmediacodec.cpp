@@ -59,6 +59,7 @@ public:
         m_metaData(metaData),
         m_running(false)
     {
+    	ALOGE("DroidMediaCodec: Source created");
     }
 
     void unlock() {
@@ -432,6 +433,7 @@ private:
 android::sp<android::MediaSource> droid_media_codec_create_encoder_raw(DroidMediaCodecEncoderMetaData *meta,
 							      android::sp<android::MediaSource> src)
 {
+  ALOGE("DroidMediaCodec: create_raw called");
   DroidMediaCodecBuilder builder(meta);
   return builder.createCodec(src, NULL);
 }
@@ -445,6 +447,7 @@ DroidMediaBufferQueue *droid_media_codec_get_buffer_queue (DroidMediaCodec *code
 
 DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
 {
+	ALOGE("DroidMediaCodec: create called");
   android::sp<android::MetaData> md(builder.buildMetaData());
   if (md == NULL) {
     return NULL;
@@ -464,6 +467,7 @@ DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
     window = queue->window();
   }
 
+  ALOGE("DroidMediaCodec: creating OMX codec");
   android::sp<android::MediaSource> codec = builder.createCodec(src, window, md);
 
   if (codec == NULL) {
@@ -523,6 +527,7 @@ bool droid_media_codec_start(DroidMediaCodec *codec)
 
 void droid_media_codec_stop(DroidMediaCodec *codec)
 {
+	ALOGE("DroidMediaCodec: stop called");
     if (codec->m_queue.get()) {
         codec->m_queue->disconnectListener();
      }
@@ -541,6 +546,7 @@ void droid_media_codec_stop(DroidMediaCodec *codec)
         codec->m_thread.clear();
     }
 
+	ALOGE("DroidMediaCodec: stopping codec");
     int err = codec->m_codec->stop();
     if (err != android::OK) {
         ALOGE("DroidMediaCodec: error 0x%x stopping codec", -err);
@@ -550,6 +556,7 @@ void droid_media_codec_stop(DroidMediaCodec *codec)
 
 void droid_media_codec_destroy(DroidMediaCodec *codec)
 {
+	ALOGE("DroidMediaCodec: destroy called");
     delete codec;
 }
 
@@ -587,7 +594,6 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 {
     int err;
     android::MediaBuffer *buffer = NULL;
-
     err = codec->m_codec->read(&buffer);
 
     if (err == android::INFO_FORMAT_CHANGED) {
@@ -612,7 +618,7 @@ DroidMediaCodecLoopReturn droid_media_codec_loop(DroidMediaCodec *codec)
 #endif
 
     if (err != android::OK) {
-        if (err == android::ERROR_END_OF_STREAM) {
+        if (err == android::ERROR_END_OF_STREAM || err == -ENODATA) {
             ALOGE("DroidMediaCodec: Got EOS");
 
             if (codec->m_cb.signal_eos) {
@@ -724,11 +730,13 @@ void droid_media_codec_set_data_callbacks(DroidMediaCodec *codec, DroidMediaCode
 
 void droid_media_codec_flush(DroidMediaCodec *codec)
 {
+	ALOGE("DroidMediaCodec flush() called");
     codec->m_src->flush();
 }
 
 void droid_media_codec_drain(DroidMediaCodec *codec)
 {
+	ALOGE("DroidMediaCodec drain() called");
     // This will cause read to return error to OMX and OMX will signal EOS
     // In practice we can get any other error instead of ERROR_END_OF_STREAM
     codec->m_src->add(NULL);
