@@ -46,6 +46,10 @@
 #include "services/services_6_0_0.h"
 #endif
 
+#if ANDROID_MAJOR == 7 && ANDROID_MINOR == 1 && ANDROID_MICRO == 1
+#include "services/services_7_1_1.h"
+#endif
+
 #if (ANDROID_MAJOR == 4 && ANDROID_MINOR == 4) || ANDROID_MAJOR >= 5
 #include <binder/AppOpsManager.h>
 #include <binder/IAppOpsService.h>

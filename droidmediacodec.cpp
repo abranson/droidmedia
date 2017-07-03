@@ -17,10 +17,23 @@
  */
 
 #include <media/stagefright/OMXClient.h>
+
+// MediaCodecSource should be used instead of OMXCodec from Android 5
+#if ANDROID_MAJOR >= 5
+#include <media/stagefright/MediaBuffer.h>
+#include <media/stagefright/MediaCodecList.h>
+#include <media/stagefright/MediaCodecSource.h>
+#include <media/stagefright/foundation/ALooper.h>
+#include <media/stagefright/foundation/AMessage.h>
+#include <gui/IGraphicBufferConsumer.h> // MediaCodecSource gains an IGraphicBufferConsumer argument in Android 6
+#endif
+
+// kSoftwareCodecsOnly and kHardwareCodecsOnly definitions moved from OMXCodec to MediaCodecList in Android 7
+#if ANDROID_MAJOR < 7
 #include <media/stagefright/OMXCodec.h>
+#endif
 #include <media/stagefright/MediaSource.h>
 #include <media/stagefright/MetaData.h>
-#include <media/stagefright/foundation/ALooper.h>
 #include <media/stagefright/MediaDefs.h>
 #include <gui/BufferQueue.h>
 #include "droidmediacodec.h"
@@ -219,6 +232,11 @@ struct _DroidMediaCodec : public android::MediaBufferObserver
         m_data_cb_data(0) {
         memset(&m_cb, 0x0, sizeof(m_cb));
         memset(&m_data_cb, 0x0, sizeof(m_data_cb));
+#if ANDROID_MAJOR >= 5
+        m_looper = new android::ALooper;
+        m_looper->setName("DroidMediaCodecLoop");
+        m_looper->start();
+#endif
     }
 
     ~_DroidMediaCodec() {
@@ -227,6 +245,9 @@ struct _DroidMediaCodec : public android::MediaBufferObserver
 	m_queue.clear();
 	m_window.clear();
 	m_thread.clear();
+#if ANDROID_MAJOR >= 5
+	m_looper->stop();
+#endif
     }
 
     void signalBufferReturned(android::MediaBuffer *buff)
@@ -265,6 +286,10 @@ struct _DroidMediaCodec : public android::MediaBufferObserver
     android::sp<Source> m_src;
     android::sp<DroidMediaBufferQueue> m_queue;
     android::sp<ANativeWindow> m_window;
+#if ANDROID_MAJOR >= 5
+    android::sp<android::ALooper> m_looper;
+#endif
+
     android::sp<android::Thread> m_thread;
 
     bool m_useExternalLoop;
@@ -298,15 +323,18 @@ public:
     m_enc(NULL), m_dec(meta) {}
 
   android::sp<android::MediaSource> createCodec(android::sp<android::MediaSource> src,
+#if ANDROID_MAJOR < 6
 						android::sp<ANativeWindow> window,
-						android::sp<android::MetaData> md = NULL) {
-    android::OMXClient omx;
-    if (omx.connect() != android::OK) {
-      ALOGE("DroidMediaCodec: Failed to connect to OMX");
-      return NULL;
-    }
+#else
+						android::sp<android::IGraphicBufferConsumer> sink,
+#endif
+#if ANDROID_MAJOR >= 5
+						android::sp<android::ALooper> looper = NULL,
+#endif
+						android::sp<android::MetaData> md = NULL
+						) {
 
-    if (md == NULL) {
+	if (md == NULL) {
       md = buildMetaData();
     }
 
@@ -314,12 +342,52 @@ public:
       return NULL;
     }
 
-    return android::OMXCodec::Create(omx.interface(),
-				     md,
-				     isEncoder(),
-				     src,
-				     NULL, flags(), window);
+#if ANDROID_MAJOR >= 5
+    android::sp<android::AMessage> format = new android::AMessage();
+    const char *str;
+    md->findCString(android::kKeyMIMEType, &str);
+    format->setString("mime", str);
+    int32_t num;
+    md->findInt32(android::kKeyWidth, &num);
+    if (num > 0) format->setInt32("width", num);
+    md->findInt32(android::kKeyHeight, &num);
+    if (num > 0) format->setInt32("height", num);
+    md->findInt32(android::kKeyStride, &num);
+    if (num > 0) format->setInt32("stride", num);
+    md->findInt32(android::kKeySliceHeight, &num);
+    if (num > 0) format->setInt32("slice-height", num);
+    md->findInt32(android::kKeyColorFormat, &num);
+    if (num > 0) format->setInt32("color-format", num);
+    md->findInt32(android::kKeyFrameRate, &num);
+    if (num > 0) format->setInt32("frame-rate", num);
+    md->findInt32(android::kKeyMaxInputSize, &num);
+    if (num > 0) format->setInt32("max-input-size", num);
+    md->findInt32(android::kKeyBitRate, &num);
+    if (num > 0) format->setInt32("bitrate", num);
+    md->findInt32(android::kKeyIFramesInterval, &num);
+    if (num > 0) format->setInt32("i-frame-interval", num);
 
+    //TODO: time-scale, profile, level
+
+    if (looper == NULL) looper = new android::ALooper;
+#if ANDROID_MAJOR >= 6
+    return android::MediaCodecSource::Create(looper, format, src, sink, flags());
+#else
+    return android::MediaCodecSource::Create(looper, format, src, flags());
+#endif
+#else
+	android::OMXClient omx;
+	if (omx.connect() != android::OK) {
+	  ALOGE("DroidMediaCodec: Failed to connect to OMX");
+	  return NULL;
+	}
+
+	return android::OMXCodec::Create(omx.interface(),
+			 md,
+			 isEncoder(),
+			 src,
+			 NULL, flags(), window);
+#endif
   }
 
   bool isEncoder() { return m_enc != NULL; }
@@ -362,7 +430,7 @@ private:
     // TODO: This is hardcoded for now. Fix it.
     md->setInt32(android::kKeyIFramesInterval, 2);
 
-    // TODO: kKeyHFR, kKeyColorFormat
+    // TODO: kKeyHFR
 
     return buildMetaData((DroidMediaCodecMetaData *)meta, md);
   }
@@ -390,8 +458,13 @@ private:
   }
 
   uint32_t flags(DroidMediaCodecEncoderMetaData *meta) {
-    return flags((DroidMediaCodecMetaData *)meta,
-		 meta->meta_data ? android::OMXCodec::kStoreMetaDataInVideoBuffers : 0);
+    return flags((DroidMediaCodecMetaData *)meta, meta->meta_data ?
+#if ANDROID_MAJOR >= 5
+    	  android::MediaCodecSource::FLAG_USE_METADATA_INPUT
+#else
+		  android::OMXCodec::kStoreMetaDataInVideoBuffers
+#endif
+: 0);
   }
 
   uint32_t flags(DroidMediaCodecDecoderMetaData *meta) {
@@ -415,11 +488,19 @@ private:
   uint32_t flags(DroidMediaCodecMetaData *meta, uint32_t currentFlags) {
     // We will not do any validation for the flags. Stagefright should take care of that.
     if (meta->flags & DROID_MEDIA_CODEC_SW_ONLY) {
+#if ANDROID_MAJOR >=7
+      currentFlags |= android::MediaCodecList::kPreferSoftwareCodecs;
+#else
       currentFlags |= android::OMXCodec::kSoftwareCodecsOnly;
+#endif
     }
 
     if (meta->flags & DROID_MEDIA_CODEC_HW_ONLY) {
+#if ANDROID_MAJOR >=7
+      currentFlags |= android::MediaCodecList::kHardwareCodecsOnly;
+#else
       currentFlags |= android::OMXCodec::kHardwareCodecsOnly;
+#endif
     }
 
     return currentFlags;
@@ -430,10 +511,17 @@ private:
 };
 
 android::sp<android::MediaSource> droid_media_codec_create_encoder_raw(DroidMediaCodecEncoderMetaData *meta,
+#if ANDROID_MAJOR >=5
+							      android::sp<android::ALooper> looper,
+#endif
 							      android::sp<android::MediaSource> src)
 {
   DroidMediaCodecBuilder builder(meta);
+#if ANDROID_MAJOR >=5
+  return builder.createCodec(src, NULL, looper);
+#else
   return builder.createCodec(src, NULL);
+#endif
 }
 
 extern "C" {
@@ -453,6 +541,10 @@ DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
   android::sp<Source> src(new Source(md));
   android::sp<DroidMediaBufferQueue> queue;
   android::sp<ANativeWindow> window = NULL;
+#if ANDROID_MAJOR > 5
+  android::sp<android::IGraphicBufferConsumer> consumer = NULL;
+#endif
+
   DroidMediaCodecMetaData *meta = builder.meta();
 
   if (builder.isEncoder()
@@ -462,22 +554,32 @@ DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
   } else {
     queue = new DroidMediaBufferQueue("DroidMediaCodecBufferQueue");
     window = queue->window();
+#if ANDROID_MAJOR > 5
+    consumer = queue->consumer();
+#endif
   }
 
+  DroidMediaCodec *mediaCodec = new DroidMediaCodec;
+  mediaCodec->m_src = src;
+  mediaCodec->m_queue = queue;
+  mediaCodec->m_window = window;
+  mediaCodec->m_useExternalLoop = true;
+
+#if ANDROID_MAJOR > 5
+  android::sp<android::MediaSource> codec = builder.createCodec(src, consumer, mediaCodec->m_looper, md);
+#elif ANDROID_MAJOR == 5
+  android::sp<android::MediaSource> codec = builder.createCodec(src, window, mediaCodec->m_looper, md);
+#else
+  mediaCodec->m_useExternalLoop = (meta->flags & DROID_MEDIA_CODEC_USE_EXTERNAL_LOOP) ? true : false;
   android::sp<android::MediaSource> codec = builder.createCodec(src, window, md);
+  #endif
 
   if (codec == NULL) {
     ALOGE("DroidMediaCodec: Failed to create codec");
     return NULL;
   }
 
-  DroidMediaCodec *mediaCodec = new DroidMediaCodec;
   mediaCodec->m_codec = codec;
-  mediaCodec->m_src = src;
-  mediaCodec->m_queue = queue;
-  mediaCodec->m_window = window;
-
-  mediaCodec->m_useExternalLoop = (meta->flags & DROID_MEDIA_CODEC_USE_EXTERNAL_LOOP) ? true : false;
 
   return mediaCodec;
 }
@@ -527,6 +629,11 @@ void droid_media_codec_stop(DroidMediaCodec *codec)
         codec->m_queue->disconnectListener();
      }
 
+#if ANDROID_MAJOR >= 5
+	if (codec->m_looper != NULL) {
+		codec->m_looper->stop();
+	}
+#endif
     if (codec->m_thread != NULL) {
         codec->m_thread->requestExit();
         // in case the thread is waiting in ->read()
