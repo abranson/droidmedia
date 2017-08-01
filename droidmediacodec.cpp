@@ -390,8 +390,8 @@ private:
   }
 
   uint32_t flags(DroidMediaCodecEncoderMetaData *meta) {
-    return flags((DroidMediaCodecMetaData *)meta,
-		 meta->meta_data ? android::OMXCodec::kStoreMetaDataInVideoBuffers : 0);
+    return flags((DroidMediaCodecMetaData *)meta, 0);
+		 //meta->meta_data ? android::OMXCodec::kStoreMetaDataInVideoBuffers : 0);
   }
 
   uint32_t flags(DroidMediaCodecDecoderMetaData *meta) {

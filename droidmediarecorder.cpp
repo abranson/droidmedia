@@ -44,20 +44,22 @@ struct _DroidMediaRecorder {
   android::status_t tick() {
     android::MediaBuffer *buffer;
     android::status_t err = m_codec->read(&buffer);
-
+    ALOGW("Got frame with data size %d", buffer->size());
     if (buffer) {
       DroidMediaCodecData data;
       data.data.data = (uint8_t *)buffer->data() + buffer->range_offset();
       data.data.size = buffer->range_length();
       data.ts = 0;
       data.decoding_ts = 0;
-
+      
+      buffer->meta_data()->dumpToLog();
       if (!buffer->meta_data()->findInt64(android::kKeyTime, &data.ts)) {
 	// I really don't know what to do here and I doubt we will reach that anyway.
 	ALOGE("DroidMediaRecorder: Received a buffer without a timestamp!");
       } else {
 	// Convert timestamp from useconds to nseconds
 	data.ts *= 1000;
+	ALOGW("Timestamp %lld", data.ts);
       }
 
       buffer->meta_data()->findInt64(android::kKeyDecodingTime, &data.decoding_ts);
