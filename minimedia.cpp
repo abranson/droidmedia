@@ -21,7 +21,16 @@
 #include <binder/IServiceManager.h>
 #include <CameraService.h>
 #include <binder/MemoryHeapBase.h>
-#include <MediaPlayerService.h>
+#include <media/IMediaPlayerService.h>
+#include <media/IMediaCodecList.h>
+#include <media/IMediaRecorder.h>
+#include <media/ICrypto.h>
+#include <media/IDrm.h>
+#include <media/IHDCP.h>
+#include <media/IRemoteDisplay.h>
+#include <media/IDrm.h>
+#include <media/stagefright/MediaCodecList.h>
+#include <OMX.h>
 #if ANDROID_MAJOR >= 6
 #include <binder/BinderService.h>
 #if ANDROID_MAJOR < 7
@@ -60,19 +69,67 @@ public:
     void notifyCameraState(String16 cameraId, CameraState newCameraState) {
     }
 };
+
+
 #endif
+
+class FakeMediaPlayerService : public BinderService<FakeMediaPlayerService>,
+                        public BnMediaPlayerService
+{
+private:
+    sp<IOMX>                    mOMX;
+public:
+    static char const *getServiceName() {
+        return "media.player";
+    }
+    sp<IMediaRecorder> createMediaRecorder(const String16 &opPackageName) {
+        return NULL;
+    }
+    sp<IMediaMetadataRetriever> createMetadataRetriever() {
+        return NULL;
+    }
+    sp<IMediaPlayer> create(const sp<IMediaPlayerClient>& client, int audioSessionId = 0) {
+        return NULL;
+    }
+
+    sp<IOMX> getOMX() {
+        if (mOMX.get() == NULL) {
+            mOMX = new OMX;
+        }
+        return mOMX;
+    }
+    sp<ICrypto>         makeCrypto() {
+        return NULL;
+    }
+    sp<IDrm>            makeDrm() {
+        return NULL;
+    }
+    sp<IHDCP>           makeHDCP(bool createEncryptionModule) {
+        return NULL;
+    }
+    sp<IMediaCodecList> getCodecList() const {
+        return MediaCodecList::getLocalInstance();
+    }
+    sp<IRemoteDisplay> listenForRemoteDisplay(const String16 &opPackageName,
+            const sp<IRemoteDisplayClient>& client, const String8& iface){
+        return NULL;
+    }
+    void addBatteryData(uint32_t params) { }
+    status_t pullBatteryData(Parcel* reply) { return 0; }
+};
 
 int
 main(int, char**)
 {
     sp<ProcessState> proc(ProcessState::self());
     sp<IServiceManager> sm = defaultServiceManager();
-
-    MediaPlayerService::instantiate();
+#if ANDROID_MAJOR >= 6
+    FakeCameraServiceProxy::instantiate();
+#endif
+    FakeMediaPlayerService::instantiate();
     CameraService::instantiate();
 
 #if ANDROID_MAJOR >= 6
-    FakeCameraServiceProxy::instantiate();
     // Camera service needs to be told which users may use the camera
     sp<IBinder> binder;
     do {

@@ -69,11 +69,15 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := minimedia.cpp
 LOCAL_C_INCLUDES := frameworks/av/services/camera/libcameraservice \
                     frameworks/av/media/libmediaplayerservice \
-                    system/media/camera/include
+                    system/media/camera/include \
+                    frameworks/av/media/libstagefright/include \
+                    frameworks/native/include/media/openmax
 LOCAL_SHARED_LIBRARIES := libcameraservice \
-                          libmediaplayerservice \
                           libcamera_client \
                           libutils \
+                          libmedia \
+                          libstagefright \
+                          libstagefright_omx \
                           libbinder \
                           libgui \
                           libcutils \
