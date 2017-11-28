@@ -35,6 +35,7 @@
 #include <media/stagefright/OMXCodec.h>
 #else
 #include <media/hardware/MetadataBufferType.h>
+#include <media/stagefright/SimpleDecodingSource.h>
 #endif
 
 #include <media/stagefright/MediaSource.h>
@@ -448,8 +449,7 @@ public:
        src,
        NULL, flags(), window);
 #else
-  // TODO - decoders for Android 7+
-  return NULL;
+  return android::SimpleDecodingSource::Create(src, flags(), window);
 #endif
   }
 
@@ -617,6 +617,12 @@ DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
   } else {
     queue = new DroidMediaBufferQueue("DroidMediaCodecBufferQueue");
     window = queue->window();
+#if ANDROID_MAJOR >= 7
+    if (!queue->connectListener()) {
+      ALOGE("Failed to connect buffer queue listener");
+    return NULL;
+#endif
+    }
   }
 
 #if ANDROID_MAJOR >= 5
@@ -641,6 +647,7 @@ DroidMediaCodec *droid_media_codec_create(DroidMediaCodecBuilder& builder)
   mediaCodec->m_window = window;
 #if ANDROID_MAJOR >= 5
   mediaCodec->m_looper = looper;
+  
 #endif
   mediaCodec->m_useExternalLoop = (meta->flags & DROID_MEDIA_CODEC_USE_EXTERNAL_LOOP) ? true : false;
 
@@ -664,17 +671,18 @@ DroidMediaCodec *droid_media_codec_create_encoder(DroidMediaCodecEncoderMetaData
 bool droid_media_codec_start(DroidMediaCodec *codec)
 {
     if (codec->m_queue.get() != NULL) {
+#if ANDROID_MAJOR < 7
         if (!codec->m_queue->connectListener()) {
-	    ALOGE("Failed to connect buffer queue listener");
-	    return false;
-	}
-
-	android::status_t err = native_window_api_connect(codec->m_window.get(),
+	        ALOGE("Failed to connect buffer queue listener");
+	        return false;
+        }
+#endif
+        android::status_t err = native_window_api_connect(codec->m_window.get(),
 							  NATIVE_WINDOW_API_MEDIA);
-	if (err != android::NO_ERROR) {
-  	    ALOGE("Failed to connect window");
-	    return false;
-	}
+        if (err != android::NO_ERROR) {
+        	ALOGE("Failed to connect window");
+        	return false;
+        }
     }
 
     int err = codec->m_codec->start();
