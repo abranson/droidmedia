@@ -675,14 +675,16 @@ bool droid_media_codec_start(DroidMediaCodec *codec)
 	    ALOGE("Failed to connect buffer queue listener");
 	    return false;
 	}
+
+    android::status_t err = native_window_api_connect(codec->m_window.get(),
+    						  NATIVE_WINDOW_API_MEDIA);
+    if (err != android::NO_ERROR) {
+       ALOGE("Failed to connect window");
+       return false;
+    }
 #endif
 
-	android::status_t err = native_window_api_connect(codec->m_window.get(),
-							  NATIVE_WINDOW_API_MEDIA);
-	if (err != android::NO_ERROR) {
-  	    ALOGE("Failed to connect window");
-	    return false;
-	}
+
     }
 
     int err = codec->m_codec->start();
