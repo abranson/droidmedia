@@ -393,7 +393,16 @@ public:
 
 #if ANDROID_MAJOR >= 7
       if (m_enc->meta_data) {
-          format->setInt32("android._input-metadata-buffer-type", android::kMetadataBufferTypeANWBuffer);
+          switch (m_enc->meta_data) {
+              case android::hardware::ICamera::VIDEO_BUFFER_MODE_BUFFER_QUEUE:
+            	  format->setInt32("android._input-metadata-buffer-type", android::kMetadataBufferTypeANWBuffer);
+            	  break;
+              case android::hardware::ICamera::VIDEO_BUFFER_MODE_DATA_CALLBACK_METADATA:
+            	  format->setInt32("android._input-metadata-buffer-type", android::kMetadataBufferTypeNativeHandleSource);
+              default:
+            	  format->setInt32("android._input-metadata-buffer-type", android::kMetadataBufferTypeInvalid);
+          }
+          // this is forbidden by the metadata spoofing patch
           format->setInt32("android._store-metadata-in-buffers-output", false);
       }
       format->setInt32("android._using-recorder", 1);
@@ -416,7 +425,9 @@ public:
         android::sp<android::AMessage> format = new android::AMessage();
         format->setString("mime", mime);
         ALOGW("Creating audio encoder for %s", mime);
-        format->setInt32("aac-profile", OMX_AUDIO_AACObjectLC);
+        if (!strcmp (mime, android::MEDIA_MIMETYPE_AUDIO_AAC)) {
+            format->setInt32("aac-profile", OMX_AUDIO_AACObjectLC);
+        }
 
         int32_t maxinput, channels, samplerate, bitrate;
         if (md->findInt32(android::kKeyMaxInputSize, &maxinput)) {

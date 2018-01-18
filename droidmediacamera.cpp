@@ -404,6 +404,10 @@ bool droid_media_camera_store_meta_data_in_buffers(DroidMediaCamera *camera, boo
             android::hardware::ICamera::VIDEO_BUFFER_MODE_BUFFER_QUEUE)) {
         ALOGI("Recording in buffer queue mode");
         return true;
+    } else if (android::OK == camera->m_camera->setVideoBufferMode(
+            android::hardware::ICamera::VIDEO_BUFFER_MODE_DATA_CALLBACK_METADATA)) {
+        ALOGI("Recording in callback metadata mode");
+        return true;
     } else {
         return false;
     }
