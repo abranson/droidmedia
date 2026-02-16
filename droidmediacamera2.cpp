@@ -191,7 +191,7 @@ static void still_image_available(void *context, AImageReader *reader)
 {
     ALOGI("Still image available");
 // TODO send image data
-    AImage *image;
+    AImage *image = NULL;
     media_status_t status;
 
     status = AImageReader_acquireNextImage(reader, &image);
@@ -212,8 +212,12 @@ static void still_image_available(void *context, AImageReader *reader)
                 break;
             }
 
-            status = AImage_getPlaneData(image, 0, (uint8_t **)&mem.data, (int *)&mem.size);
+            int plane_len = 0;
+            uint8_t *plane_ptr = NULL;
+            status = AImage_getPlaneData(image, 0, &plane_ptr, &plane_len);
             if (status == AMEDIA_OK && camera->m_cb.compressed_image_cb) {
+                mem.data = plane_ptr;
+                mem.size = (size_t)plane_len;
                 camera->m_cb.compressed_image_cb(camera->m_cb_data, &mem);
             }
             break;
