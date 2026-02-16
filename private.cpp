@@ -134,8 +134,9 @@ void _DroidMediaBufferQueue::attachToCameraVideo(android::sp<android::Camera>& c
 #endif
 }
 
-bool _DroidMediaBufferQueue::setBufferSize(uint32_t width, uint32_t height)
+bool _DroidMediaBufferQueue::setBufferSizeFormat(uint32_t width, uint32_t height, uint32_t format)
 {
+    m_queue->setDefaultBufferFormat(format);
     return m_queue->setDefaultBufferSize(width, height) == android::OK;
 }
 
