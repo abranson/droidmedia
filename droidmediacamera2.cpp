@@ -1461,7 +1461,8 @@ int param_key_string_to_enum(const char *key)
         !strcmp(key, android::CameraParameters::KEY_ZOOM) ?
             ACAMERA_CONTROL_ZOOM_RATIO :
 #else
-//TODO
+        !strcmp(key, android::CameraParameters::KEY_ZOOM) ?
+            ACAMERA_SCALER_CROP_REGION :
 #endif
         !strcmp(key, android::CameraParameters::KEY_VIDEO_STABILIZATION) ?
             ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE :
@@ -1551,6 +1552,79 @@ bool parse_pair_int32(std::string &str, char delim, int32_t &first, int32_t &sec
     return true;
 }
 
+bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, const std::string &value_s)
+{
+    if (!camera || !camera->m_metadata || !request) {
+        ALOGW("Unable to apply zoom crop, camera/request not ready");
+        return false;
+    }
+
+    float zoom_ratio = 0.0f;
+    if (!parse_float_value(value_s, zoom_ratio)) {
+        ALOGW("Ignoring invalid zoom value: %s", value_s.c_str());
+        return false;
+    }
+
+    if (zoom_ratio < 1.0f) {
+        zoom_ratio = 1.0f;
+    }
+
+    float max_zoom = 1.0f;
+    ACameraMetadata_const_entry zoom_entry;
+    camera_status_t status = ACameraMetadata_getConstEntry(camera->m_metadata,
+        ACAMERA_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, &zoom_entry);
+    if (status == ACAMERA_OK && zoom_entry.count > 0 && zoom_entry.data.f[0] > 1.0f) {
+        max_zoom = zoom_entry.data.f[0];
+    }
+
+    if (zoom_ratio > max_zoom) {
+        zoom_ratio = max_zoom;
+    }
+
+    ACameraMetadata_const_entry active_array_entry;
+    status = ACameraMetadata_getConstEntry(camera->m_metadata,
+        ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &active_array_entry);
+    if (status != ACAMERA_OK || active_array_entry.count < 4) {
+        ALOGW("Unable to read active array for zoom crop");
+        return false;
+    }
+
+    int32_t left = active_array_entry.data.i32[0];
+    int32_t top = active_array_entry.data.i32[1];
+    int32_t width = active_array_entry.data.i32[2];
+    int32_t height = active_array_entry.data.i32[3];
+
+    if (width <= 0 || height <= 0) {
+        ALOGW("Invalid active array size for zoom crop");
+        return false;
+    }
+
+    int32_t crop_width = static_cast<int32_t>(width / zoom_ratio);
+    int32_t crop_height = static_cast<int32_t>(height / zoom_ratio);
+    if (crop_width <= 0 || crop_height <= 0) {
+        ALOGW("Invalid crop size computed for zoom");
+        return false;
+    }
+
+    int32_t crop_left = left + (width - crop_width) / 2;
+    int32_t crop_top = top + (height - crop_height) / 2;
+    int32_t crop_region[4] = {
+        crop_left,
+        crop_top,
+        crop_width,
+        crop_height
+    };
+
+    status = ACaptureRequest_setEntry_i32(request,
+        ACAMERA_SCALER_CROP_REGION, 4, crop_region);
+    if (status != ACAMERA_OK) {
+        ALOGW("Setting crop region for zoom failed");
+        return false;
+    }
+
+    return true;
+}
+
 void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::unordered_map<std::string, std::string> &param_map) {
      ALOGI("update_request");
      uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
@@ -1566,8 +1640,9 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
          if ((key = param_key_string_to_enum(key_s.c_str())) >= 0) {
              switch (key) {
              case ACAMERA_CONTROL_AE_ANTIBANDING_MODE: {
-                 uint8_t mode;
-                 if ((mode = ab_mode_string_to_enum(value_s.c_str())) != -1) {
+                 int mode_i = ab_mode_string_to_enum(value_s.c_str());
+                 if (mode_i >= 0) {
+                     uint8_t mode = static_cast<uint8_t>(mode_i);
                      ACaptureRequest_setEntry_u8(request, key, 1, &mode);
                  }
                  break;
@@ -1613,8 +1688,9 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
                  break;
              }
              case ACAMERA_CONTROL_AF_MODE: {
-                 uint8_t mode;
-                 if ((mode = focus_mode_string_to_enum(value_s.c_str())) != -1) {
+                 int mode_i = focus_mode_string_to_enum(value_s.c_str());
+                 if (mode_i >= 0) {
+                     uint8_t mode = static_cast<uint8_t>(mode_i);
                      ACaptureRequest_setEntry_u8(request, key, 1, &mode);
                  }
                  break;
@@ -1640,22 +1716,25 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
                  break;
              }
              case ACAMERA_CONTROL_AWB_MODE: {
-                 uint8_t mode;
-                 if ((mode = wb_mode_string_to_enum(value_s.c_str())) != -1) {
+                 int mode_i = wb_mode_string_to_enum(value_s.c_str());
+                 if (mode_i >= 0) {
+                     uint8_t mode = static_cast<uint8_t>(mode_i);
                      ACaptureRequest_setEntry_u8(request, key, 1, &mode);
                  }
                  break;
              }
              case ACAMERA_CONTROL_EFFECT_MODE: {
-                 uint8_t mode;
-                 if ((mode = effect_mode_string_to_enum(value_s.c_str())) != -1) {
+                 int mode_i = effect_mode_string_to_enum(value_s.c_str());
+                 if (mode_i >= 0) {
+                     uint8_t mode = static_cast<uint8_t>(mode_i);
                      ACaptureRequest_setEntry_u8(request, key, 1, &mode);
                  }
                  break;
              }
              case ACAMERA_CONTROL_SCENE_MODE: {
-                 uint8_t mode;
-                 if ((mode = scene_mode_string_to_enum(value_s.c_str(), ACAMERA_CONTROL_SCENE_MODE_DISABLED)) != -1) {
+                 int mode_i = scene_mode_string_to_enum(value_s.c_str(), ACAMERA_CONTROL_SCENE_MODE_DISABLED);
+                 if (mode_i >= 0) {
+                     uint8_t mode = static_cast<uint8_t>(mode_i);
                      ACaptureRequest_setEntry_u8(request, key, 1, &mode);
                  }
                  break;
@@ -1685,18 +1764,39 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
                  break;
              }
 #else
-//TODO
+             case ACAMERA_SCALER_CROP_REGION:
+                 set_zoom_crop_region(camera, request, value_s);
+                 break;
 #endif
              case ACAMERA_FLASH_MODE: {
-                 uint8_t mode;
+                 camera_status_t status;
                  if (!strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_TORCH)) {
-                     mode = ACAMERA_CONTROL_AE_MODE_ON;
-                     ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &mode);;
-                     mode = ACAMERA_FLASH_MODE_TORCH;
-                     ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &mode);;
+                     uint8_t ae_mode = ACAMERA_CONTROL_AE_MODE_ON;
+                     status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
+                     if (status != ACAMERA_OK) {
+                         ALOGW("Failed to apply AE mode for torch");
+                     }
+                     uint8_t flash_mode = ACAMERA_FLASH_MODE_TORCH;
+                     status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
+                     if (status != ACAMERA_OK) {
+                         ALOGW("Failed to apply flash torch mode");
+                     }
                  } else {
-                     if ((mode = flash_mode_string_to_enum(value_s.c_str())) != -1) {
-                         ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &mode);
+                     int ae_mode_i = flash_mode_string_to_enum(value_s.c_str());
+                     if (ae_mode_i >= 0) {
+                         uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
+                         status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
+                         if (status != ACAMERA_OK) {
+                             ALOGW("Failed to apply AE mode for flash");
+                         }
+
+                         uint8_t flash_mode = ACAMERA_FLASH_MODE_OFF;
+                         status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
+                         if (status != ACAMERA_OK) {
+                             ALOGW("Failed to clear torch flash mode");
+                         }
+                     } else {
+                         ALOGW("Ignoring invalid flash mode: %s", value_s.c_str());
                      }
                  }
                  break;
@@ -1746,7 +1846,7 @@ bool droid_media_camera_set_parameters(DroidMediaCamera *camera, const char *par
         std::string key_s;
         std::string value_s;
         parse_pair_string(param, '=', key_s, value_s);
-        param_map.insert({key_s, value_s});
+        param_map[key_s] = value_s;
 
         ALOGI("set_parameters %s=%s", key_s.c_str(), value_s.c_str());
 
@@ -1988,10 +2088,18 @@ char *droid_media_camera_get_parameters(DroidMediaCamera *camera)
             break;
 #if ANDROID_MAJOR >= 11
         case ACAMERA_CONTROL_ZOOM_RATIO_RANGE:
-            params += "max-zoom="+std::to_string(entry.data.f[1])+";";
+            if (entry.count >= 2) {
+                params += "max-zoom="+std::to_string(entry.data.f[1])+";";
+                params += "zoom-supported=true;";
+            }
             break;
 #else
-//TODO
+        case ACAMERA_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM:
+            if (entry.count > 0) {
+                params += "max-zoom="+std::to_string(entry.data.f[0])+";";
+                params += "zoom-supported=true;";
+            }
+            break;
 #endif
         case ACAMERA_FLASH_INFO_AVAILABLE:
             if (entry.data.u8[0] == ACAMERA_FLASH_INFO_AVAILABLE_FALSE) {
