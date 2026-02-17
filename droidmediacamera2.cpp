@@ -41,6 +41,9 @@ typedef ANativeWindow ACameraWindowType;
 #include <string>
 #include <unordered_map>
 #include <set>
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
 
 #include "droidmediabuffer.h"
 #include "private.h"
@@ -431,6 +434,7 @@ bool droid_media_camera_get_info(DroidMediaCameraInfo *info, int camera_number)
     ALOGI("Get info from camera %i of %i", camera_number, camera_id_list->numCameras);
 
     if (camera_id_list->numCameras <= 0 ||
+            camera_number < 0 ||
             camera_number >= camera_id_list->numCameras) {
         ALOGE("Invalid camera number");
         goto fail;
@@ -588,15 +592,15 @@ void destroy_capture_session(DroidMediaCamera *camera)
         ACaptureRequest_free(camera->m_video_request);
         camera->m_video_request = NULL;
     }
-/*
     if (camera->m_preview_anw) {
         ANativeWindow_release(camera->m_preview_anw);
+        camera->m_preview_anw = NULL;
     }
 
     if (camera->m_video_anw) {
         ANativeWindow_release(camera->m_video_anw);
+        camera->m_video_anw = NULL;
     }
-*/
 }
 
 bool setup_capture_session(DroidMediaCamera *camera)
@@ -651,50 +655,54 @@ bool setup_capture_session(DroidMediaCamera *camera)
     ALOGI("setup_capture_session preview done");
 
     // Video
-    camera->m_recording_queue->setBufferSizeFormat(camera->video_width, camera->video_height,
+    if (camera->m_recording_queue.get()) {
+        camera->m_recording_queue->setBufferSizeFormat(camera->video_width, camera->video_height,
 #if (ANDROID_MAJOR < 8)
-        HAL_PIXEL_FORMAT_YCbCr_420_888);
+            HAL_PIXEL_FORMAT_YCbCr_420_888);
 #else
-        HAL_PIXEL_FORMAT_YCBCR_420_888);
+            HAL_PIXEL_FORMAT_YCBCR_420_888);
 #endif
 
-    camera->m_video_anw = camera->m_recording_queue->window();
-    ANativeWindow_acquire(camera->m_video_anw);
+        camera->m_video_anw = camera->m_recording_queue->window();
+        ANativeWindow_acquire(camera->m_video_anw);
 
-    ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
+        ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
 
-    ALOGI("setup_capture_session video");
-    status = ACameraDevice_createCaptureRequest(camera->m_device,
-        TEMPLATE_PREVIEW, &camera->m_video_request);
-    if (status != ACAMERA_OK) {
-        goto fail;
+        ALOGI("setup_capture_session video");
+        status = ACameraDevice_createCaptureRequest(camera->m_device,
+            TEMPLATE_PREVIEW, &camera->m_video_request);
+        if (status != ACAMERA_OK) {
+            goto fail;
+        }
+
+        status = ACameraOutputTarget_create(camera->m_video_anw, &camera->m_video_output_target);
+        if (status != ACAMERA_OK) {
+            goto fail;
+        }
+
+        status = ACaptureRequest_addTarget(camera->m_video_request, camera->m_video_output_target);
+        if (status != ACAMERA_OK) {
+            goto fail;
+        }
+
+        ALOGI("camera->m_video_anw %p", camera->m_video_anw);
+
+        status = ACaptureSessionOutput_create(camera->m_video_anw, &camera->m_video_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("ACaptureSessionOutput_create failed %i", status);
+            goto fail;
+        }
+
+        status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
+            camera->m_video_output);
+        if (status != ACAMERA_OK) {
+            goto fail;
+        }
+
+        ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
+    } else {
+        ALOGW("No recording queue available, skipping video output setup");
     }
-
-    status = ACameraOutputTarget_create(camera->m_video_anw, &camera->m_video_output_target);
-    if (status != ACAMERA_OK) {
-        goto fail;
-    }
-
-    status = ACaptureRequest_addTarget(camera->m_video_request, camera->m_video_output_target);
-    if (status != ACAMERA_OK) {
-        goto fail;
-    }
-
-    ALOGI("camera->m_video_anw %p", camera->m_video_anw);
-
-    status = ACaptureSessionOutput_create(camera->m_video_anw, &camera->m_video_output);
-    if (status != ACAMERA_OK) {
-        ALOGE("ACaptureSessionOutput_create failed %i", status);
-        goto fail;
-    }
-
-    status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
-        camera->m_video_output);
-    if (status != ACAMERA_OK) {
-        goto fail;
-    }
-
-    ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
 
     if (camera->image_height != -1 && camera->image_width != -1) {
         ALOGI("setup_capture_session image start");
@@ -768,7 +776,9 @@ DroidMediaCamera *droid_media_camera_connect(int camera_number)
         goto fail;
     }
 
-    if (camera->m_camera_id_list->numCameras <= 0 || camera_number >= camera->m_camera_id_list->numCameras) {
+    if (camera->m_camera_id_list->numCameras <= 0 ||
+            camera_number < 0 ||
+            camera_number >= camera->m_camera_id_list->numCameras) {
         ALOGE("Invalid camera number");
         goto fail;
     }
@@ -969,6 +979,10 @@ bool droid_media_camera_is_preview_enabled(DroidMediaCamera *camera)
 bool droid_media_camera_start_recording(DroidMediaCamera *camera)
 {
     ALOGI("start_recording");
+    if (!camera->m_session) {
+        ALOGE("start_recording failed, no active session");
+        return false;
+    }
     if (!camera->m_video_request) {
         ALOGE("start_recording failed, no request");
         return false;
@@ -980,6 +994,7 @@ bool droid_media_camera_start_recording(DroidMediaCamera *camera)
         ALOGE("Starting recording failed");
         return false;
     }
+    camera->m_video_mode = true;
     camera->m_video_recording_enabled = true;
 
     return true;
@@ -988,14 +1003,23 @@ bool droid_media_camera_start_recording(DroidMediaCamera *camera)
 void droid_media_camera_stop_recording(DroidMediaCamera *camera)
 {
     ALOGI("stop_recording");
+    if (!camera->m_session) {
+        ALOGE("stop_recording failed, no active session");
+        camera->m_video_mode = false;
+        camera->m_video_recording_enabled = false;
+        return;
+    }
 
     if (!camera->m_video_request) {
         ALOGE("stop_recording failed, no request");
+        camera->m_video_mode = false;
+        camera->m_video_recording_enabled = false;
         return;
     }
     ACameraCaptureSession_stopRepeating(camera->m_session);
 
     camera->m_pending_viewfinder_restart = true;
+    camera->m_video_mode = false;
     camera->m_video_recording_enabled = false;
 }
 
@@ -1479,13 +1503,52 @@ void parse_pair_string(std::string &str, char delim, std::string &first, std::st
     std::getline(iss, second, delim);
 }
 
-void parse_pair_int32(std::string &str, char delim, int32_t &first, int32_t &second)
+bool parse_int32_value(const std::string &str, int32_t &out)
+{
+    errno = 0;
+    char *end = nullptr;
+    long value = strtol(str.c_str(), &end, 10);
+
+    if (errno != 0 || end == str.c_str() || *end != '\0' ||
+            value < std::numeric_limits<int32_t>::min() ||
+            value > std::numeric_limits<int32_t>::max()) {
+        return false;
+    }
+
+    out = static_cast<int32_t>(value);
+    return true;
+}
+
+bool parse_float_value(const std::string &str, float &out)
+{
+    errno = 0;
+    char *end = nullptr;
+    float value = strtof(str.c_str(), &end);
+
+    if (errno != 0 || end == str.c_str() || *end != '\0') {
+        return false;
+    }
+
+    out = value;
+    return true;
+}
+
+bool parse_pair_int32(std::string &str, char delim, int32_t &first, int32_t &second)
 {
     std::string first_s;
     std::string second_s;
     parse_pair_string(str, delim, first_s, second_s);
-    first = std::stoi(first_s);
-    second = std::stoi(second_s);
+
+    int32_t parsed_first = 0;
+    int32_t parsed_second = 0;
+    if (!parse_int32_value(first_s, parsed_first) ||
+            !parse_int32_value(second_s, parsed_second)) {
+        return false;
+    }
+
+    first = parsed_first;
+    second = parsed_second;
+    return true;
 }
 
 void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::unordered_map<std::string, std::string> &param_map) {
@@ -1510,10 +1573,15 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
                  break;
              }
              case ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION:
-                 if (int32_t value = std::stoi(value_s)) {
+             {
+                 int32_t value = 0;
+                 if (parse_int32_value(value_s, value)) {
                      ACaptureRequest_setEntry_i32(request, key, 1, &value);
+                 } else {
+                     ALOGW("Ignoring invalid exposure compensation: %s", value_s.c_str());
                  }
                  break;
+             }
              case ACAMERA_CONTROL_AE_LOCK: {
                  uint8_t value = ACAMERA_CONTROL_AE_LOCK_OFF;
                  if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
@@ -1537,8 +1605,11 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
              }
              case ACAMERA_CONTROL_AE_TARGET_FPS_RANGE: {
                  int32_t values[2];
-                 parse_pair_int32(value_s, ',', values[0], values[1]);
-                 ACaptureRequest_setEntry_i32(request, key, 2, values);
+                 if (parse_pair_int32(value_s, ',', values[0], values[1])) {
+                     ACaptureRequest_setEntry_i32(request, key, 2, values);
+                 } else {
+                     ALOGW("Ignoring invalid fps range: %s", value_s.c_str());
+                 }
                  break;
              }
              case ACAMERA_CONTROL_AF_MODE: {
@@ -1604,10 +1675,15 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
              }
 #if ANDROID_MAJOR >= 11
              case ACAMERA_CONTROL_ZOOM_RATIO:
-                 if (float value = std::stof(value_s)) {
+             {
+                 float value = 0.0f;
+                 if (parse_float_value(value_s, value)) {
                      ACaptureRequest_setEntry_float(request, key, 1, &value);
+                 } else {
+                     ALOGW("Ignoring invalid zoom ratio: %s", value_s.c_str());
                  }
                  break;
+             }
 #else
 //TODO
 #endif
@@ -1626,12 +1702,12 @@ void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::uno
                  break;
              }
              case ACAMERA_JPEG_QUALITY: {
-                 int32_t value = std::stoi(value_s);
-                 if (value >= 1 && value <= 100) {
+                 int32_t value = 0;
+                 if (parse_int32_value(value_s, value) && value >= 1 && value <= 100) {
                      uint8_t quality = static_cast<uint8_t>(value);
                      ACaptureRequest_setEntry_u8(request, key, 1, &quality);
                  } else {
-                     ALOGW("Ignoring jpeg quality out of range: %d", value);
+                     ALOGW("Ignoring invalid jpeg quality: %s", value_s.c_str());
                  }
                  break;
              }
@@ -1678,11 +1754,20 @@ bool droid_media_camera_set_parameters(DroidMediaCamera *camera, const char *par
             if (!strcmp(key_s.c_str(), "picture-format")) {
                 //TODO is this needed?
             } else if (!strcmp(key_s.c_str(), "picture-size")) {
-                parse_pair_int32(value_s, 'x', camera->image_width, camera->image_height);
+                if (!parse_pair_int32(value_s, 'x', camera->image_width, camera->image_height)) {
+                    ALOGW("Invalid picture-size value: %s", value_s.c_str());
+                    return false;
+                }
             } else if (!strcmp(key_s.c_str(), "preview-size")) {
-                parse_pair_int32(value_s, 'x', camera->preview_width, camera->preview_height);
+                if (!parse_pair_int32(value_s, 'x', camera->preview_width, camera->preview_height)) {
+                    ALOGW("Invalid preview-size value: %s", value_s.c_str());
+                    return false;
+                }
             } else if (!strcmp(key_s.c_str(), "video-size")) {
-                parse_pair_int32(value_s, 'x', camera->video_width, camera->video_height);
+                if (!parse_pair_int32(value_s, 'x', camera->video_width, camera->video_height)) {
+                    ALOGW("Invalid video-size value: %s", value_s.c_str());
+                    return false;
+                }
             }
         }
     }
@@ -1806,7 +1891,7 @@ char *droid_media_camera_get_parameters(DroidMediaCamera *camera)
             break;
         }
         case ACAMERA_CONTROL_AE_LOCK_AVAILABLE:
-            if (entry.count > 0 || entry.data.u8[0] == ACAMERA_CONTROL_AE_LOCK_AVAILABLE_TRUE) {
+            if (entry.count > 0 && entry.data.u8[0] == ACAMERA_CONTROL_AE_LOCK_AVAILABLE_TRUE) {
                 params += "auto-exposure-lock-supported=true;";
                 params += "auto-exposure-lock=false;";
             } else {
@@ -1870,7 +1955,7 @@ char *droid_media_camera_get_parameters(DroidMediaCamera *camera)
             }
             break;
         case ACAMERA_CONTROL_AWB_LOCK_AVAILABLE:
-            if (entry.count > 0 || entry.data.u8[0] == ACAMERA_CONTROL_AWB_LOCK_AVAILABLE_TRUE) {
+            if (entry.count > 0 && entry.data.u8[0] == ACAMERA_CONTROL_AWB_LOCK_AVAILABLE_TRUE) {
                 params += "auto-whitebalance-lock-supported=true;";
                 params += "auto-whitebalance-lock=false;";
             } else {
@@ -1878,18 +1963,27 @@ char *droid_media_camera_get_parameters(DroidMediaCamera *camera)
             }
             break;
         case ACAMERA_CONTROL_MAX_REGIONS:
-            if (entry.count > 0) {
-                 params += "max-num-focus-areas="+std::to_string(entry.data.u8[2])+";";
-                 params += "max-num-metering-areas="+std::to_string(entry.data.u8[0])+";";
-                 camera->max_ae_regions = entry.data.u8[0];
-                 camera->max_awb_regions = entry.data.u8[1];
-                 camera->max_focus_regions = entry.data.u8[2];
+            if (entry.count >= 3) {
+                 params += "max-num-focus-areas="+std::to_string(entry.data.i32[2])+";";
+                 params += "max-num-metering-areas="+std::to_string(entry.data.i32[0])+";";
+                 camera->max_ae_regions = entry.data.i32[0];
+                 camera->max_awb_regions = entry.data.i32[1];
+                 camera->max_focus_regions = entry.data.i32[2];
             }
             break;
-        case ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE:
-            if (entry.count > 1) {
+        case ACAMERA_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES:
+            if (entry.count > 0) {
+                bool supported = false;
+                for (int32_t j = 0; j < entry.count; j++) {
+                    if (entry.data.u8[j] == ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON) {
+                        supported = true;
+                        break;
+                    }
+                }
+                if (supported) {
                  ALOGI("video stabilization supported");
-                 params += "video-stabilization-supported = true;";
+                 params += "video-stabilization-supported=true;";
+                }
             }
             break;
 #if ANDROID_MAJOR >= 11
@@ -1985,7 +2079,8 @@ bool droid_media_camera_take_picture(DroidMediaCamera *camera, int msgType)
     camera_status_t status;
     ALOGI("take_picture");
 
-    if (!camera->m_session) {
+    if (!camera->m_session || !camera->m_image_request) {
+        ALOGE("take_picture failed, session or image request missing");
         return false;
     }
 
@@ -2064,29 +2159,47 @@ bool droid_media_camera_start_external_recording(DroidMediaCamera *camera)
 {
     ALOGI("start_external_recording");
     camera_status_t status;
+    bool removed_image_output = false;
+    bool added_ext_output = false;
 
-    ACameraCaptureSession_stopRepeating(camera->m_session);
+    if (!camera->m_session || !camera->m_capture_session_output_container ||
+            !camera->m_ext_video_output || !camera->m_ext_video_request) {
+        ALOGE("start_external_recording failed, missing session/output/request");
+        return false;
+    }
 
     ACameraCaptureSession *old_session = camera->m_session;
+    ACameraCaptureSession *new_session = NULL;
 
-    ACaptureSessionOutputContainer_remove(camera->m_capture_session_output_container,
-        camera->m_image_reader_output);
+    ACameraCaptureSession_stopRepeating(old_session);
+
+    if (camera->m_image_reader_output) {
+        status = ACaptureSessionOutputContainer_remove(camera->m_capture_session_output_container,
+            camera->m_image_reader_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("Removing image reader output failed");
+            goto fail;
+        }
+        removed_image_output = true;
+    }
 
     status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
         camera->m_ext_video_output);
     if (status != ACAMERA_OK) {
+        ALOGE("Adding external output failed");
         goto fail;
     }
+    added_ext_output = true;
 
     status = ACameraDevice_createCaptureSession(
         camera->m_device, camera->m_capture_session_output_container,
-        &camera->m_capture_session_state_callbacks, &camera->m_session);
+        &camera->m_capture_session_state_callbacks, &new_session);
     if (status != ACAMERA_OK) {
         ALOGI("setup_capture_session failed (status: %i)", status);
         goto fail;
     }
 
-    ACameraCaptureSession_close(old_session);
+    camera->m_session = new_session;
 
     status = ACameraCaptureSession_setRepeatingRequest(camera->m_session,
         &camera->m_capture_callbacks, 1, &camera->m_ext_video_request, NULL);
@@ -2095,12 +2208,41 @@ bool droid_media_camera_start_external_recording(DroidMediaCamera *camera)
         goto fail;
     }
 
+    camera->m_video_mode = true;
     camera->m_video_recording_enabled = true;
+    ACameraCaptureSession_close(old_session);
 
     ALOGI("start_external_recording done");
     return true;
 
 fail:
+    if (camera->m_session == new_session && new_session) {
+        ACameraCaptureSession_close(new_session);
+        camera->m_session = old_session;
+    }
+    if (added_ext_output) {
+        status = ACaptureSessionOutputContainer_remove(camera->m_capture_session_output_container,
+            camera->m_ext_video_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("Rollback removing external output failed");
+        }
+    }
+    if (removed_image_output) {
+        status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
+            camera->m_image_reader_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("Rollback restoring image reader output failed");
+        }
+    }
+    if (old_session && camera->m_preview_request) {
+        status = ACameraCaptureSession_setRepeatingRequest(old_session,
+            &camera->m_capture_callbacks, 1, &camera->m_preview_request, NULL);
+        if (status != ACAMERA_OK) {
+            ALOGE("Rollback restarting preview failed");
+        }
+    }
+    camera->m_video_mode = false;
+    camera->m_video_recording_enabled = false;
     ALOGI("Starting external recording failed");
     return false;
 }
@@ -2110,19 +2252,52 @@ void droid_media_camera_stop_external_recording(DroidMediaCamera *camera)
 {
     ALOGI("stop_external_recording");
     camera_status_t status;
+    ACameraCaptureSession *old_session = camera->m_session;
+    ACameraCaptureSession *new_session = NULL;
 
     camera->m_video_recording_enabled = false;
+    camera->m_video_mode = false;
 
-    ACameraCaptureSession_stopRepeating(camera->m_session);
-
-    ACaptureSessionOutputContainer_remove(camera->m_capture_session_output_container,
-        camera->m_ext_video_output);
-
-    status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
-        camera->m_image_reader_output);
-    if (status != ACAMERA_OK) {
-        ALOGE("Adding preview failed");
+    if (!camera->m_session || !camera->m_capture_session_output_container) {
+        ALOGE("stop_external_recording: missing session/container");
+        return;
     }
+
+    ACameraCaptureSession_stopRepeating(old_session);
+
+    if (camera->m_ext_video_output) {
+        status = ACaptureSessionOutputContainer_remove(camera->m_capture_session_output_container,
+            camera->m_ext_video_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("Removing external output failed");
+        }
+    }
+
+    if (camera->m_image_reader_output) {
+        status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
+            camera->m_image_reader_output);
+        if (status != ACAMERA_OK) {
+            ALOGE("Adding image reader output failed");
+        }
+    }
+
+    // Session outputs changed; create a new session for the updated output set.
+    status = ACameraDevice_createCaptureSession(
+        camera->m_device, camera->m_capture_session_output_container,
+        &camera->m_capture_session_state_callbacks, &new_session);
+    if (status != ACAMERA_OK || !new_session) {
+        ALOGE("Recreating capture session failed");
+        camera->m_session = old_session;
+        status = ACameraCaptureSession_setRepeatingRequest(camera->m_session,
+            &camera->m_capture_callbacks, 1, &camera->m_preview_request, NULL);
+        if (status != ACAMERA_OK) {
+            ALOGE("Fallback preview restart failed");
+        }
+        return;
+    }
+
+    camera->m_session = new_session;
+    ACameraCaptureSession_close(old_session);
 
     status = ACameraCaptureSession_setRepeatingRequest(camera->m_session,
         &camera->m_capture_callbacks, 1, &camera->m_preview_request, NULL);
