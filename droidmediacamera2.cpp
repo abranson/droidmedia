@@ -1913,6 +1913,8 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
             case ACAMERA_CONTROL_AE_TARGET_FPS_RANGE: {
                 int32_t values[2];
                 if (parse_pair_int32(value_s, ',', values[0], values[1])) {
+                    values[0] /= 1000;
+                    values[1] /= 1000;
                     ACaptureRequest_setEntry_i32(request, key, 2, values);
                 } else {
                     ALOGW("Ignoring invalid fps range: %s", value_s.c_str());
