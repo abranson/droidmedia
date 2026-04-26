@@ -286,32 +286,15 @@ static bool submit_still_capture_request(DroidMediaCamera *camera)
     return true;
 }
 
-static bool needs_flash_precapture(DroidMediaCamera *camera)
-{
-    if (!camera || !camera->m_image_request) {
-        return false;
-    }
-
-    ACameraMetadata_const_entry entry;
-    camera_status_t status = ACaptureRequest_getConstEntry(camera->m_image_request,
-        ACAMERA_CONTROL_AE_MODE, &entry);
-    if (status != ACAMERA_OK || entry.count < 1) {
-        return false;
-    }
-
-    uint8_t ae_mode = entry.data.u8[0];
-    return ae_mode == ACAMERA_CONTROL_AE_MODE_ON_AUTO_FLASH ||
-        ae_mode == ACAMERA_CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE;
-}
-
 static void process_precapture_result(DroidMediaCamera *camera, ACaptureRequest *request, const ACameraMetadata *result)
 {
-    if (!camera || request != camera->m_preview_request || !result) {
+    if (!camera || !result) {
         return;
     }
 
-    if (camera->m_still_capture_state != STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START &&
-            camera->m_still_capture_state != STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE) {
+    ALOGV("capture state: %i", camera->m_still_capture_state);
+
+    if (camera->m_still_capture_state != STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE) {
         return;
     }
 
@@ -322,21 +305,11 @@ static void process_precapture_result(DroidMediaCamera *camera, ACaptureRequest 
     camera_status_t status = ACameraMetadata_getConstEntry(result, ACAMERA_CONTROL_AE_STATE, &entry);
     if (status == ACAMERA_OK && entry.count > 0) {
         uint8_t ae_state = entry.data.u8[0];
-        if (camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START) {
-            if (ae_state == ACAMERA_CONTROL_AE_STATE_PRECAPTURE ||
-                    ae_state == ACAMERA_CONTROL_AE_STATE_SEARCHING) {
-                camera->m_still_capture_state = STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE;
-            } else if (ae_state == ACAMERA_CONTROL_AE_STATE_FLASH_REQUIRED) {
-                camera->m_still_capture_state = STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE;
-            } else if (ae_state == ACAMERA_CONTROL_AE_STATE_CONVERGED ||
-                    ae_state == ACAMERA_CONTROL_AE_STATE_LOCKED) {
-                ready_for_still_capture = true;
-            }
-        } else if (camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE) {
-            if (ae_state != ACAMERA_CONTROL_AE_STATE_PRECAPTURE &&
-                    ae_state != ACAMERA_CONTROL_AE_STATE_SEARCHING) {
-                ready_for_still_capture = true;
-            }
+        ALOGD("precapture AE state: %i", ae_state);
+        if (camera->m_still_capture_state == ACAMERA_CONTROL_AE_STATE_CONVERGED ||
+                camera->m_still_capture_state == ACAMERA_CONTROL_AE_STATE_FLASH_REQUIRED ||
+                camera->m_still_capture_state == ACAMERA_CONTROL_AE_STATE_LOCKED) {
+            ready_for_still_capture = true;
         }
     }
 
@@ -348,6 +321,7 @@ static void process_precapture_result(DroidMediaCamera *camera, ACaptureRequest 
     }
 
     if (ready_for_still_capture) {
+        ALOGD("AE precapture complete, proceeding with still capture");
         submit_still_capture_request(camera);
     }
 }
@@ -483,36 +457,7 @@ static void capture_session_on_capture_completed(
 
     process_precapture_result(camera, request, result);
 
-    camera_status_t status = ACameraMetadata_getConstEntry(result, ACAMERA_CONTROL_AF_TRIGGER, &entry);
-    if (status == ACAMERA_OK) {
-        uint8_t value = entry.data.u8[0];
-//        ALOGI("AF trigger state: %i", value);
-        if (value == ACAMERA_CONTROL_AF_TRIGGER_START) {
-            ALOGI("AF trigger start found");
-            uint8_t afTrigger = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
-            status = ACaptureRequest_setEntry_u8(camera->m_preview_request,
-                ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
-
-            if (status == ACAMERA_OK) {
-                ALOGI("AF state: restart preview start");
-                status = ACameraCaptureSession_setRepeatingRequest(camera->m_session, &camera->m_capture_callbacks, 1,
-                    &camera->m_preview_request, NULL);
-            }
-        } else if (value == ACAMERA_CONTROL_AF_TRIGGER_CANCEL) {
-            ALOGI("AF trigger cancel found");
-            uint8_t afTrigger = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
-                status = ACaptureRequest_setEntry_u8(camera->m_preview_request,
-                ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
-
-            if (status == ACAMERA_OK) {
-                ALOGI("AF state: restart preview cancel");
-                status = ACameraCaptureSession_setRepeatingRequest(camera->m_session, &camera->m_capture_callbacks, 1,
-                    &camera->m_preview_request, NULL);
-            }
-        }
-    }
-
-    status = ACameraMetadata_getConstEntry(result, ACAMERA_CONTROL_AF_STATE, &entry);
+    camera_status_t status = ACameraMetadata_getConstEntry(result, ACAMERA_CONTROL_AF_STATE, &entry);
     if (status == ACAMERA_OK) {
         uint8_t value = entry.data.u8[0];
         int res = 0;
@@ -543,9 +488,11 @@ static void capture_session_on_capture_failed(
     if ((camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START ||
             camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE) &&
             request == camera->m_preview_request) {
+        // FIXME: comparison never true
         abort_still_capture_flow(camera, "precapture request failed");
     } else if (camera->m_still_capture_state == STILL_CAPTURE_STATE_CAPTURING &&
             request == camera->m_image_request) {
+        // FIXME: comparison never true
         abort_still_capture_flow(camera, "still capture request failed");
     }
 }
@@ -558,6 +505,11 @@ static void capture_session_on_capture_sequence_completed(
     (void)frameNumber;
     DroidMediaCamera *camera = (DroidMediaCamera *)context;
     ALOGI("Capture sequence completed: %p", context);
+
+    if (camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START &&
+            sequenceId == camera->m_precapture_sequence_id) {
+        camera->m_still_capture_state = STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE;
+    }
 
     if (camera->m_still_capture_state == STILL_CAPTURE_STATE_CAPTURING &&
             sequenceId == camera->m_still_capture_sequence_id) {
@@ -573,8 +525,7 @@ static void capture_session_on_capture_sequence_abort(
     (void)session;
     DroidMediaCamera *camera = (DroidMediaCamera *)context;
     ALOGI("Capture sequence aborted: %p", context);
-    if ((camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START ||
-            camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_DONE) &&
+    if (camera->m_still_capture_state == STILL_CAPTURE_STATE_WAITING_PRECAPTURE_START &&
             sequenceId == camera->m_precapture_sequence_id) {
         abort_still_capture_flow(camera, "precapture sequence aborted");
     } else if (camera->m_still_capture_state == STILL_CAPTURE_STATE_CAPTURING &&
@@ -1267,15 +1218,16 @@ bool droid_media_camera_start_auto_focus(DroidMediaCamera *camera)
     camera_status_t status;
     uint8_t afTrigger = ACAMERA_CONTROL_AF_TRIGGER_START;
 
-    ACameraCaptureSession_stopRepeating(camera->m_session);
+    ACaptureRequest *request = ACaptureRequest_copy(camera->m_preview_request);
 
-    status = ACaptureRequest_setEntry_u8(camera->m_preview_request,
-        ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
+    status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
 
     if (status == ACAMERA_OK) {
         status = ACameraCaptureSession_capture(camera->m_session,
-            &camera->m_capture_callbacks, 1, &camera->m_preview_request, NULL);
+            &camera->m_capture_callbacks, 1, &request, NULL);
     }
+
+    ACaptureRequest_free(request);
 
     return status == ACAMERA_OK;
 }
@@ -1286,15 +1238,17 @@ bool droid_media_camera_cancel_auto_focus(DroidMediaCamera *camera)
     camera_status_t status;
     uint8_t afTrigger = ACAMERA_CONTROL_AF_TRIGGER_CANCEL;
 
-    ACameraCaptureSession_stopRepeating(camera->m_session);
+    ACaptureRequest *request = ACaptureRequest_copy(camera->m_preview_request);
 
-    status = ACaptureRequest_setEntry_u8(camera->m_preview_request,
+    status = ACaptureRequest_setEntry_u8(request,
         ACAMERA_CONTROL_AF_TRIGGER, 1, &afTrigger);
 
     if (status == ACAMERA_OK) {
         status = ACameraCaptureSession_capture(camera->m_session,
-            &camera->m_capture_callbacks, 1, &camera->m_preview_request, NULL);
+            &camera->m_capture_callbacks, 1, &request, NULL);
     }
+
+    ACaptureRequest_free(request);
 
     return status == ACAMERA_OK;
 }
@@ -1567,7 +1521,7 @@ const char *scene_mode_enum_to_string(uint8_t scene_mode, bool &found)
     }
 }
 
-int flash_mode_string_to_enum(const char *flash_mode)
+int flash_mode_string_to_ae_mode_enum(const char *flash_mode)
 {
     return
         !flash_mode ?
@@ -1580,35 +1534,10 @@ int flash_mode_string_to_enum(const char *flash_mode)
             ACAMERA_CONTROL_AE_MODE_ON_ALWAYS_FLASH :
         !strcmp(flash_mode, android::CameraParameters::FLASH_MODE_RED_EYE) ?
             ACAMERA_CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE :
-/*
         !strcmp(flash_mode, android::CameraParameters::FLASH_MODE_TORCH) ?
-             :
-*/
+            ACAMERA_CONTROL_AE_MODE_ON :
         -1;
 }
-/*
-const char *flash_mode_enum_to_string(uint8_t flash_mode, bool &found)
-{
-    found = true;
-    switch (flash_mode) {
-        case ACAMERA_CONTROL_AE_MODE_ON:
-            return android::CameraParameters::FLASH_MODE_OFF;
-        case ACAMERA_CONTROL_AE_MODE_ON_AUTO_FLASH:
-            return android::CameraParameters::FLASH_MODE_AUTO;
-        case ACAMERA_CONTROL_AE_MODE_ON_ALWAYS_FLASH:
-            return android::CameraParameters::FLASH_MODE_ON;
-        case ACAMERA_CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE:
-            return android::CameraParameters::FLASH_MODE_RED_EYE;
-//        case FLASH_MODE_TORCH:
-//            return android::CameraParameters::FLASH_MODE_TORCH;
-        default:
-            ALOGE("%s: Unknown flash mode enum %d",
-                    __FUNCTION__, flash_mode);
-            found = false;
-            return "";
-    }
-}
-*/
 
 int focus_mode_string_to_enum(const char *focus_mode)
 {
@@ -2004,40 +1933,25 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
 #endif
             case ACAMERA_FLASH_MODE: {
                 camera_status_t status;
-                if (!strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_TORCH)) {
-                    uint8_t ae_mode = ACAMERA_CONTROL_AE_MODE_ON;
+                int ae_mode_i = flash_mode_string_to_ae_mode_enum(value_s.c_str());
+                if (ae_mode_i >= 0) {
+                    uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
                     status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
                     if (status != ACAMERA_OK) {
-                        ALOGW("Failed to apply AE mode for torch");
+                        ALOGW("Failed to apply AE mode for flash");
                     }
-                    uint8_t flash_mode = ACAMERA_FLASH_MODE_TORCH;
-                    status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
-                    if (status != ACAMERA_OK) {
-                        ALOGW("Failed to apply flash torch mode");
+
+                    // Set flash mode when AE doesn't override it.
+                    if (ae_mode == ACAMERA_CONTROL_AE_MODE_OFF || ae_mode == ACAMERA_CONTROL_AE_MODE_ON) {
+                        bool torch = !strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_TORCH);
+                        uint8_t flash_mode = torch ? ACAMERA_FLASH_MODE_TORCH : ACAMERA_FLASH_MODE_OFF;
+                        status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
+                        if (status != ACAMERA_OK) {
+                            ALOGW("Failed to apply flash mode");
+                        }
                     }
                 } else {
-                    int ae_mode_i = flash_mode_string_to_enum(value_s.c_str());
-                    if (ae_mode_i >= 0) {
-                        uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
-                        status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
-                        if (status != ACAMERA_OK) {
-                            ALOGW("Failed to apply AE mode for flash");
-                        }
-
-                        // For still capture AUTO/ON, let AE mode drive strobe behavior.
-                        // For preview/video (and explicit OFF), force torch off.
-                        bool force_flash_off = (request != camera->m_image_request) ||
-                            !strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_OFF);
-                        if (force_flash_off) {
-                            uint8_t flash_mode = ACAMERA_FLASH_MODE_OFF;
-                            status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
-                            if (status != ACAMERA_OK) {
-                                ALOGW("Failed to clear torch flash mode");
-                            }
-                        }
-                    } else {
-                        ALOGW("Ignoring invalid flash mode: %s", value_s.c_str());
-                    }
+                    ALOGW("Ignoring invalid flash mode: %s", value_s.c_str());
                 }
                 break;
             }
@@ -2444,7 +2358,7 @@ bool droid_media_camera_take_picture(DroidMediaCamera *camera, int msgType)
         return false;
     }
 
-    if (!needs_flash_precapture(camera) || !camera->m_preview_request || !camera->m_preview_enabled) {
+    if (!camera->m_preview_request || !camera->m_preview_enabled) {
         status = ACameraCaptureSession_capture(camera->m_session, &camera->m_capture_callbacks, 1,
             &camera->m_image_request, &seq_id);
         return status == ACAMERA_OK;
