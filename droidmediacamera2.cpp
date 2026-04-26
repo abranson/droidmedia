@@ -1856,202 +1856,202 @@ bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, co
 }
 
 static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::unordered_map<std::string, std::string> &param_map) {
-     ALOGI("update_request");
-     uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
-     ACaptureRequest_setEntry_u8(request,
-         ACAMERA_CONTROL_MODE, 1, &controlMode);
+    ALOGI("update_request");
+    uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
+    ACaptureRequest_setEntry_u8(request,
+        ACAMERA_CONTROL_MODE, 1, &controlMode);
 
-     // TODO check if something is missing
-     for (auto& it: param_map) {
-         std::string key_s = it.first;
-         std::string value_s = it.second;
-         ALOGI("update_request parameters %s=%s", key_s.c_str(), value_s.c_str());
-         int32_t key;
-         if ((key = param_key_string_to_enum(key_s.c_str())) >= 0) {
-             switch (key) {
-             case ACAMERA_CONTROL_AE_ANTIBANDING_MODE: {
-                 int mode_i = ab_mode_string_to_enum(value_s.c_str());
-                 if (mode_i >= 0) {
-                     uint8_t mode = static_cast<uint8_t>(mode_i);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &mode);
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION:
-             {
-                 int32_t value = 0;
-                 if (parse_int32_value(value_s, value)) {
-                     ACaptureRequest_setEntry_i32(request, key, 1, &value);
-                 } else {
-                     ALOGW("Ignoring invalid exposure compensation: %s", value_s.c_str());
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AE_LOCK: {
-                 uint8_t value = ACAMERA_CONTROL_AE_LOCK_OFF;
-                 if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
-                     value = ACAMERA_CONTROL_AE_LOCK_ON;
-                 }
-                 ACaptureRequest_setEntry_u8(request, key, 1, &value);
-                 break;
-             }
-             case ACAMERA_CONTROL_AE_REGIONS: {
-                 std::vector<int32_t> areas;
-                 if (parse_areas(value_s, &areas)) {
-                     int32_t *values = new int32_t[areas.size()];
-                     for (int i = 0; i < areas.size(); i++) {
-                         values[i] = areas[i];
-                     }
-                     ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
-                     ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AWB_REGIONS, areas.size(), values);
-                     delete[] values;
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AE_TARGET_FPS_RANGE: {
-                 int32_t values[2];
-                 if (parse_pair_int32(value_s, ',', values[0], values[1])) {
-                     ACaptureRequest_setEntry_i32(request, key, 2, values);
-                 } else {
-                     ALOGW("Ignoring invalid fps range: %s", value_s.c_str());
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AF_MODE: {
-                 int mode_i = focus_mode_string_to_enum(value_s.c_str());
-                 if (mode_i >= 0) {
-                     uint8_t mode = static_cast<uint8_t>(mode_i);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &mode);
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AF_REGIONS: {
-                 std::vector<int32_t> areas;
-                 if (parse_areas(value_s, &areas)) {
-                     int32_t *values = new int32_t[areas.size()];
-                     for (int i = 0; i < areas.size(); i++) {
-                         values[i] = areas[i];
-                     }
-                     ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
-                     delete[] values;
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_AWB_LOCK: {
-                 uint8_t value = ACAMERA_CONTROL_AWB_LOCK_OFF;
-                 if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
-                     value = ACAMERA_CONTROL_AWB_LOCK_ON;
-                 }
-                 ACaptureRequest_setEntry_u8(request, key, 1, &value);
-                 break;
-             }
-             case ACAMERA_CONTROL_AWB_MODE: {
-                 int mode_i = wb_mode_string_to_enum(value_s.c_str());
-                 if (mode_i >= 0) {
-                     uint8_t mode = static_cast<uint8_t>(mode_i);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &mode);
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_EFFECT_MODE: {
-                 int mode_i = effect_mode_string_to_enum(value_s.c_str());
-                 if (mode_i >= 0) {
-                     uint8_t mode = static_cast<uint8_t>(mode_i);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &mode);
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_SCENE_MODE: {
-                 int mode_i = scene_mode_string_to_enum(value_s.c_str(), ACAMERA_CONTROL_SCENE_MODE_DISABLED);
-                 if (mode_i >= 0) {
-                     uint8_t mode = static_cast<uint8_t>(mode_i);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &mode);
-                 }
-                 break;
-             }
-             case ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE: {
-                uint8_t value = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
-                 if (camera->m_video_mode) {
-                     if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
-                         if (request == camera->m_preview_request ||
-                             request == camera->m_video_request) {
-                             value = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
-                         }
-                     }
-                 }
-                 ACaptureRequest_setEntry_u8(request, key, 1, &value);
-                 break;
-             }
+    // TODO check if something is missing
+    for (auto& it: param_map) {
+        std::string key_s = it.first;
+        std::string value_s = it.second;
+        ALOGI("update_request parameters %s=%s", key_s.c_str(), value_s.c_str());
+        int32_t key;
+        if ((key = param_key_string_to_enum(key_s.c_str())) >= 0) {
+            switch (key) {
+            case ACAMERA_CONTROL_AE_ANTIBANDING_MODE: {
+                int mode_i = ab_mode_string_to_enum(value_s.c_str());
+                if (mode_i >= 0) {
+                    uint8_t mode = static_cast<uint8_t>(mode_i);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &mode);
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION:
+            {
+                int32_t value = 0;
+                if (parse_int32_value(value_s, value)) {
+                    ACaptureRequest_setEntry_i32(request, key, 1, &value);
+                } else {
+                    ALOGW("Ignoring invalid exposure compensation: %s", value_s.c_str());
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AE_LOCK: {
+                uint8_t value = ACAMERA_CONTROL_AE_LOCK_OFF;
+                if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
+                    value = ACAMERA_CONTROL_AE_LOCK_ON;
+                }
+                ACaptureRequest_setEntry_u8(request, key, 1, &value);
+                break;
+            }
+            case ACAMERA_CONTROL_AE_REGIONS: {
+                std::vector<int32_t> areas;
+                if (parse_areas(value_s, &areas)) {
+                    int32_t *values = new int32_t[areas.size()];
+                    for (int i = 0; i < areas.size(); i++) {
+                        values[i] = areas[i];
+                    }
+                    ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
+                    ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AWB_REGIONS, areas.size(), values);
+                    delete[] values;
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AE_TARGET_FPS_RANGE: {
+                int32_t values[2];
+                if (parse_pair_int32(value_s, ',', values[0], values[1])) {
+                    ACaptureRequest_setEntry_i32(request, key, 2, values);
+                } else {
+                    ALOGW("Ignoring invalid fps range: %s", value_s.c_str());
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AF_MODE: {
+                int mode_i = focus_mode_string_to_enum(value_s.c_str());
+                if (mode_i >= 0) {
+                    uint8_t mode = static_cast<uint8_t>(mode_i);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &mode);
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AF_REGIONS: {
+                std::vector<int32_t> areas;
+                if (parse_areas(value_s, &areas)) {
+                    int32_t *values = new int32_t[areas.size()];
+                    for (int i = 0; i < areas.size(); i++) {
+                        values[i] = areas[i];
+                    }
+                    ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
+                    delete[] values;
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_AWB_LOCK: {
+                uint8_t value = ACAMERA_CONTROL_AWB_LOCK_OFF;
+                if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
+                    value = ACAMERA_CONTROL_AWB_LOCK_ON;
+                }
+                ACaptureRequest_setEntry_u8(request, key, 1, &value);
+                break;
+            }
+            case ACAMERA_CONTROL_AWB_MODE: {
+                int mode_i = wb_mode_string_to_enum(value_s.c_str());
+                if (mode_i >= 0) {
+                    uint8_t mode = static_cast<uint8_t>(mode_i);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &mode);
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_EFFECT_MODE: {
+                int mode_i = effect_mode_string_to_enum(value_s.c_str());
+                if (mode_i >= 0) {
+                    uint8_t mode = static_cast<uint8_t>(mode_i);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &mode);
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_SCENE_MODE: {
+                int mode_i = scene_mode_string_to_enum(value_s.c_str(), ACAMERA_CONTROL_SCENE_MODE_DISABLED);
+                if (mode_i >= 0) {
+                    uint8_t mode = static_cast<uint8_t>(mode_i);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &mode);
+                }
+                break;
+            }
+            case ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE: {
+               uint8_t value = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
+                if (camera->m_video_mode) {
+                    if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
+                        if (request == camera->m_preview_request ||
+                            request == camera->m_video_request) {
+                            value = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
+                        }
+                    }
+                }
+                ACaptureRequest_setEntry_u8(request, key, 1, &value);
+                break;
+            }
 #if ANDROID_MAJOR >= 11
-             case ACAMERA_CONTROL_ZOOM_RATIO:
-             {
-                 float value = 0.0f;
-                 if (parse_float_value(value_s, value)) {
-                     ACaptureRequest_setEntry_float(request, key, 1, &value);
-                 } else {
-                     ALOGW("Ignoring invalid zoom ratio: %s", value_s.c_str());
-                 }
-                 break;
-             }
+            case ACAMERA_CONTROL_ZOOM_RATIO:
+            {
+                float value = 0.0f;
+                if (parse_float_value(value_s, value)) {
+                    ACaptureRequest_setEntry_float(request, key, 1, &value);
+                } else {
+                    ALOGW("Ignoring invalid zoom ratio: %s", value_s.c_str());
+                }
+                break;
+            }
 #else
-             case ACAMERA_SCALER_CROP_REGION:
-                 set_zoom_crop_region(camera, request, value_s);
-                 break;
+            case ACAMERA_SCALER_CROP_REGION:
+                set_zoom_crop_region(camera, request, value_s);
+                break;
 #endif
-             case ACAMERA_FLASH_MODE: {
-                 camera_status_t status;
-                 if (!strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_TORCH)) {
-                     uint8_t ae_mode = ACAMERA_CONTROL_AE_MODE_ON;
-                     status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
-                     if (status != ACAMERA_OK) {
-                         ALOGW("Failed to apply AE mode for torch");
-                     }
-                     uint8_t flash_mode = ACAMERA_FLASH_MODE_TORCH;
-                     status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
-                     if (status != ACAMERA_OK) {
-                         ALOGW("Failed to apply flash torch mode");
-                     }
-                 } else {
-                     int ae_mode_i = flash_mode_string_to_enum(value_s.c_str());
-                     if (ae_mode_i >= 0) {
-                         uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
-                         status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
-                         if (status != ACAMERA_OK) {
-                             ALOGW("Failed to apply AE mode for flash");
-                         }
+            case ACAMERA_FLASH_MODE: {
+                camera_status_t status;
+                if (!strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_TORCH)) {
+                    uint8_t ae_mode = ACAMERA_CONTROL_AE_MODE_ON;
+                    status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
+                    if (status != ACAMERA_OK) {
+                        ALOGW("Failed to apply AE mode for torch");
+                    }
+                    uint8_t flash_mode = ACAMERA_FLASH_MODE_TORCH;
+                    status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
+                    if (status != ACAMERA_OK) {
+                        ALOGW("Failed to apply flash torch mode");
+                    }
+                } else {
+                    int ae_mode_i = flash_mode_string_to_enum(value_s.c_str());
+                    if (ae_mode_i >= 0) {
+                        uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
+                        status = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae_mode);
+                        if (status != ACAMERA_OK) {
+                            ALOGW("Failed to apply AE mode for flash");
+                        }
 
-                         // For still capture AUTO/ON, let AE mode drive strobe behavior.
-                         // For preview/video (and explicit OFF), force torch off.
-                         bool force_flash_off = (request != camera->m_image_request) ||
-                             !strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_OFF);
-                         if (force_flash_off) {
-                             uint8_t flash_mode = ACAMERA_FLASH_MODE_OFF;
-                             status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
-                             if (status != ACAMERA_OK) {
-                                 ALOGW("Failed to clear torch flash mode");
-                             }
-                         }
-                     } else {
-                         ALOGW("Ignoring invalid flash mode: %s", value_s.c_str());
-                     }
-                 }
-                 break;
-             }
-             case ACAMERA_JPEG_QUALITY: {
-                 int32_t value = 0;
-                 if (parse_int32_value(value_s, value) && value >= 1 && value <= 100) {
-                     uint8_t quality = static_cast<uint8_t>(value);
-                     ACaptureRequest_setEntry_u8(request, key, 1, &quality);
-                 } else {
-                     ALOGW("Ignoring invalid jpeg quality: %s", value_s.c_str());
-                 }
-                 break;
-             }
-             default:
-                 break;
-             }
-         }
-     }
+                        // For still capture AUTO/ON, let AE mode drive strobe behavior.
+                        // For preview/video (and explicit OFF), force torch off.
+                        bool force_flash_off = (request != camera->m_image_request) ||
+                            !strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_OFF);
+                        if (force_flash_off) {
+                            uint8_t flash_mode = ACAMERA_FLASH_MODE_OFF;
+                            status = ACaptureRequest_setEntry_u8(request, ACAMERA_FLASH_MODE, 1, &flash_mode);
+                            if (status != ACAMERA_OK) {
+                                ALOGW("Failed to clear torch flash mode");
+                            }
+                        }
+                    } else {
+                        ALOGW("Ignoring invalid flash mode: %s", value_s.c_str());
+                    }
+                }
+                break;
+            }
+            case ACAMERA_JPEG_QUALITY: {
+                int32_t value = 0;
+                if (parse_int32_value(value_s, value) && value >= 1 && value <= 100) {
+                    uint8_t quality = static_cast<uint8_t>(value);
+                    ACaptureRequest_setEntry_u8(request, key, 1, &quality);
+                } else {
+                    ALOGW("Ignoring invalid jpeg quality: %s", value_s.c_str());
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        }
+    }
 
 }
 
