@@ -1905,7 +1905,8 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
                 if (camera->m_video_mode) {
                     if (!strcmp(value_s.c_str(), android::CameraParameters::TRUE)) {
                         if (request == camera->m_preview_request ||
-                            request == camera->m_video_request) {
+                            request == camera->m_video_request ||
+                            request == camera->m_ext_video_request) {
                             value = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
                         }
                     }
@@ -2040,6 +2041,11 @@ bool droid_media_camera_set_parameters(DroidMediaCamera *camera, const char *par
     if (camera->m_video_request) {
         ALOGI("update_request video mode");
         update_request(camera, camera->m_video_request, param_map);
+    }
+
+    if (camera->m_ext_video_request) {
+        ALOGI("update_request external video");
+        update_request(camera, camera->m_ext_video_request, param_map);
     }
 
     if (camera->m_preview_request) {
@@ -2633,6 +2639,8 @@ bool droid_media_camera_set_external_video_window(DroidMediaCamera *camera, ANat
         ALOGE("ACaptureSessionOutput_create failed %i", status);
         goto fail;
     }
+
+    update_request(camera, camera->m_ext_video_request, camera->m_param_map);
 
     ALOGD("set_external_video_window done");
 
