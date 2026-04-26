@@ -865,53 +865,55 @@ bool setup_capture_session(DroidMediaCamera *camera)
     ALOGI("setup_capture_session preview done");
 
     // Video
-    if (camera->m_recording_queue.get()) {
-        camera->m_recording_queue->setBufferSizeFormat(camera->video_width, camera->video_height,
+    if (camera->video_width != -1 && camera->video_height != -1) {
+        if (camera->m_recording_queue.get()) {
+            camera->m_recording_queue->setBufferSizeFormat(camera->video_width, camera->video_height,
 #if (ANDROID_MAJOR < 8)
-            HAL_PIXEL_FORMAT_YCbCr_420_888);
+                HAL_PIXEL_FORMAT_YCbCr_420_888);
 #else
-            HAL_PIXEL_FORMAT_YCBCR_420_888);
+                HAL_PIXEL_FORMAT_YCBCR_420_888);
 #endif
 
-        camera->m_video_anw = camera->m_recording_queue->window();
-        ANativeWindow_acquire(camera->m_video_anw);
+            camera->m_video_anw = camera->m_recording_queue->window();
+            ANativeWindow_acquire(camera->m_video_anw);
 
-        ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
+            ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
 
-        ALOGI("setup_capture_session video");
-        status = ACameraDevice_createCaptureRequest(camera->m_device,
-            TEMPLATE_PREVIEW, &camera->m_video_request);
-        if (status != ACAMERA_OK) {
-            goto fail;
+            ALOGI("setup_capture_session video");
+            status = ACameraDevice_createCaptureRequest(camera->m_device,
+                TEMPLATE_PREVIEW, &camera->m_video_request);
+            if (status != ACAMERA_OK) {
+                goto fail;
+            }
+
+            status = ACameraOutputTarget_create(camera->m_video_anw, &camera->m_video_output_target);
+            if (status != ACAMERA_OK) {
+                goto fail;
+            }
+
+            status = ACaptureRequest_addTarget(camera->m_video_request, camera->m_video_output_target);
+            if (status != ACAMERA_OK) {
+                goto fail;
+            }
+
+            ALOGI("camera->m_video_anw %p", camera->m_video_anw);
+
+            status = ACaptureSessionOutput_create(camera->m_video_anw, &camera->m_video_output);
+            if (status != ACAMERA_OK) {
+                ALOGE("ACaptureSessionOutput_create failed %i", status);
+                goto fail;
+            }
+
+            status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
+                camera->m_video_output);
+            if (status != ACAMERA_OK) {
+                goto fail;
+            }
+
+            ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
+        } else {
+            ALOGW("No recording queue available, skipping video output setup");
         }
-
-        status = ACameraOutputTarget_create(camera->m_video_anw, &camera->m_video_output_target);
-        if (status != ACAMERA_OK) {
-            goto fail;
-        }
-
-        status = ACaptureRequest_addTarget(camera->m_video_request, camera->m_video_output_target);
-        if (status != ACAMERA_OK) {
-            goto fail;
-        }
-
-        ALOGI("camera->m_video_anw %p", camera->m_video_anw);
-
-        status = ACaptureSessionOutput_create(camera->m_video_anw, &camera->m_video_output);
-        if (status != ACAMERA_OK) {
-            ALOGE("ACaptureSessionOutput_create failed %i", status);
-            goto fail;
-        }
-
-        status = ACaptureSessionOutputContainer_add(camera->m_capture_session_output_container,
-            camera->m_video_output);
-        if (status != ACAMERA_OK) {
-            goto fail;
-        }
-
-        ALOGI("video window format %i", ANativeWindow_getFormat(camera->m_video_anw));
-    } else {
-        ALOGW("No recording queue available, skipping video output setup");
     }
 
     if (camera->image_height != -1 && camera->image_width != -1) {
