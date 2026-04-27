@@ -1841,6 +1841,20 @@ bool parse_areas(std::string &str, std::vector<MeteringArea> *areas)
     return true;
 }
 
+
+static bool camera_has_flash(DroidMediaCamera *camera)
+{
+    if (!camera || !camera->m_metadata) {
+        return false;
+    }
+
+    ACameraMetadata_const_entry entry;
+    camera_status_t status = ACameraMetadata_getConstEntry(camera->m_metadata,
+        ACAMERA_FLASH_INFO_AVAILABLE, &entry);
+    return status == ACAMERA_OK && entry.count > 0 &&
+        entry.data.u8[0] != ACAMERA_FLASH_INFO_AVAILABLE_FALSE;
+}
+
 void parse_pair_string(std::string &str, char delim, std::string &first, std::string &second)
 {
     std::istringstream iss(str);
@@ -2143,6 +2157,12 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
 #endif
             case ACAMERA_FLASH_MODE: {
                 camera_status_t status;
+                if (!camera_has_flash(camera) &&
+                        strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_OFF)) {
+                    ALOGW("Ignoring flash mode on device without flash: %s", value_s.c_str());
+                    value_s = android::CameraParameters::FLASH_MODE_OFF;
+                }
+
                 int ae_mode_i = flash_mode_string_to_ae_mode_enum(value_s.c_str());
                 if (ae_mode_i >= 0) {
                     uint8_t ae_mode = static_cast<uint8_t>(ae_mode_i);
@@ -2210,6 +2230,14 @@ bool droid_media_camera_set_parameters(DroidMediaCamera *camera, const char *par
         std::string key_s;
         std::string value_s;
         parse_pair_string(param, '=', key_s, value_s);
+
+        if (!strcmp(key_s.c_str(), android::CameraParameters::KEY_FLASH_MODE) &&
+                !camera_has_flash(camera) &&
+                strcmp(value_s.c_str(), android::CameraParameters::FLASH_MODE_OFF)) {
+            ALOGW("Forcing flash mode off on device without flash: %s", value_s.c_str());
+            value_s = android::CameraParameters::FLASH_MODE_OFF;
+        }
+
         camera->m_param_map[key_s] = value_s;
         param_map[key_s] = value_s;
 
@@ -2476,7 +2504,7 @@ char *droid_media_camera_get_parameters(DroidMediaCamera *camera)
             break;
 #endif
         case ACAMERA_FLASH_INFO_AVAILABLE:
-            if (entry.data.u8[0] == ACAMERA_FLASH_INFO_AVAILABLE_FALSE) {
+            if (!camera_has_flash(camera)) {
                 params += "flash-mode-values=off;";
             } else {
                 params += "flash-mode-values=off,auto,on,torch;";
