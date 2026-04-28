@@ -125,6 +125,14 @@ enum PrecaptureState {
     PRECAPTURE_STATE_LOCKED,
 };
 
+struct MeteringArea {
+    int32_t xmin;
+    int32_t ymin;
+    int32_t xmax;
+    int32_t ymax;
+    int32_t weight;
+};
+
 struct _DroidMediaCamera
 {
     _DroidMediaCamera() :
@@ -1805,13 +1813,13 @@ int param_key_string_to_enum(const char *key)
         -1;
 }
 
-bool parse_areas(std::string &str, std::vector<int32_t> *areas)
+bool parse_areas(std::string &str, std::vector<MeteringArea> *areas)
 {
     static const size_t NUM_FIELDS = 5;
     areas->clear();
     if (str.empty()) {
         // If no key exists, use default (0,0,0,0,0)
-        areas->insert(areas->end(), {0, 0, 0, 0, 0});
+        areas->emplace_back(MeteringArea{0, 0, 0, 0, 0});
         return true;
     }
     ssize_t start = str.find('(', 0) + 1;
@@ -1827,7 +1835,7 @@ bool parse_areas(std::string &str, std::vector<int32_t> *areas)
             }
             area = num_end + 1;
         }
-        areas->insert(areas->end(), {values[0], values[1], values[2], values[3], values[4]});
+        areas->emplace_back(MeteringArea{values[0], values[1], values[2], values[3], values[4]});
         start = str.find('(', start) + 1;
     }
     return true;
@@ -1888,7 +1896,8 @@ bool parse_pair_int32(std::string &str, char delim, int32_t &first, int32_t &sec
     return true;
 }
 
-bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, const std::string &value_s)
+bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, const std::string &value_s,
+                          const int32_t *active_array_size)
 {
     if (!camera || !camera->m_metadata || !request) {
         ALOGW("Unable to apply zoom crop, camera/request not ready");
@@ -1917,23 +1926,10 @@ bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, co
         zoom_ratio = max_zoom;
     }
 
-    ACameraMetadata_const_entry active_array_entry;
-    status = ACameraMetadata_getConstEntry(camera->m_metadata,
-        ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &active_array_entry);
-    if (status != ACAMERA_OK || active_array_entry.count < 4) {
-        ALOGW("Unable to read active array for zoom crop");
-        return false;
-    }
-
-    int32_t left = active_array_entry.data.i32[0];
-    int32_t top = active_array_entry.data.i32[1];
-    int32_t width = active_array_entry.data.i32[2];
-    int32_t height = active_array_entry.data.i32[3];
-
-    if (width <= 0 || height <= 0) {
-        ALOGW("Invalid active array size for zoom crop");
-        return false;
-    }
+    int32_t left = active_array_size[0];
+    int32_t top = active_array_size[1];
+    int32_t width = active_array_size[2];
+    int32_t height = active_array_size[3];
 
     int32_t crop_width = static_cast<int32_t>(width / zoom_ratio);
     int32_t crop_height = static_cast<int32_t>(height / zoom_ratio);
@@ -1961,11 +1957,37 @@ bool set_zoom_crop_region(DroidMediaCamera *camera, ACaptureRequest *request, co
     return true;
 }
 
+void convert_to_sensor_coordinates(int32_t *out, MeteringArea &area, const int32_t *active_array_size)
+{
+    int width = active_array_size[2];
+    int height = active_array_size[3];
+    out[0] = (area.xmin + 1000) * (width - 1) / 2000;
+    out[1] = (area.ymin + 1000) * (height - 1) / 2000;
+    out[2] = (area.xmax + 1000) * (width - 1) / 2000;
+    out[3] = (area.ymax + 1000) * (height - 1) / 2000;
+    out[4] = area.weight;
+}
+
 static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, std::unordered_map<std::string, std::string> &param_map) {
     ALOGD("update_request");
     uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
     ACaptureRequest_setEntry_u8(request,
         ACAMERA_CONTROL_MODE, 1, &controlMode);
+
+    const int32_t *active_array_size = NULL;
+    ACameraMetadata_const_entry active_array_entry;
+    camera_status_t status = ACameraMetadata_getConstEntry(camera->m_metadata,
+        ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &active_array_entry);
+    if (status == ACAMERA_OK && active_array_entry.count == 4) {
+        active_array_size = active_array_entry.data.i32;
+        if (active_array_size[2] <= 0 || active_array_size[3] <= 0) {
+            ALOGW("Invalid active array size");
+            active_array_size = NULL;
+        }
+    } else {
+        ALOGW("Unable to read active array size");
+    }
+
 
     // TODO check if something is missing
     for (auto& it: param_map) {
@@ -2002,15 +2024,19 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
                 break;
             }
             case ACAMERA_CONTROL_AE_REGIONS: {
-                std::vector<int32_t> areas;
-                if (parse_areas(value_s, &areas)) {
-                    int32_t *values = new int32_t[areas.size()];
-                    for (int i = 0; i < areas.size(); i++) {
-                        values[i] = areas[i];
+                if (active_array_size) {
+                    std::vector<MeteringArea> areas;
+                    if (parse_areas(value_s, &areas)) {
+                        int32_t *values = new int32_t[areas.size() * 5];
+                        for (int i = 0; i < areas.size(); i++) {
+                            convert_to_sensor_coordinates(values + i * 5, areas[i], active_array_size);
+                        }
+                        ACaptureRequest_setEntry_i32(request, key, areas.size() * 5, values);
+                        ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AWB_REGIONS, areas.size() * 5, values);
+                        delete[] values;
                     }
-                    ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
-                    ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AWB_REGIONS, areas.size(), values);
-                    delete[] values;
+                } else {
+                    ALOGW("Cannot set metering areas without active array size");
                 }
                 break;
             }
@@ -2034,14 +2060,18 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
                 break;
             }
             case ACAMERA_CONTROL_AF_REGIONS: {
-                std::vector<int32_t> areas;
-                if (parse_areas(value_s, &areas)) {
-                    int32_t *values = new int32_t[areas.size()];
-                    for (int i = 0; i < areas.size(); i++) {
-                        values[i] = areas[i];
+                if (active_array_size) {
+                    std::vector<MeteringArea> areas;
+                    if (parse_areas(value_s, &areas)) {
+                        int32_t *values = new int32_t[areas.size() * 5];
+                        for (int i = 0; i < areas.size(); i ++) {
+                            convert_to_sensor_coordinates(values + i * 5, areas[i], active_array_size);
+                        }
+                        ACaptureRequest_setEntry_i32(request, key, areas.size() * 5, values);
+                        delete[] values;
                     }
-                    ACaptureRequest_setEntry_i32(request, key, areas.size(), values);
-                    delete[] values;
+                } else {
+                    ALOGW("Cannot set AF areas without active array size");
                 }
                 break;
             }
@@ -2104,7 +2134,11 @@ static void update_request(DroidMediaCamera *camera, ACaptureRequest *request, s
             }
 #else
             case ACAMERA_SCALER_CROP_REGION:
-                set_zoom_crop_region(camera, request, value_s);
+                if (active_array_size) {
+                    set_zoom_crop_region(camera, request, value_s, active_array_size);
+                } else {
+                    ALOGW("Cannot set zoom without active array size");
+                }
                 break;
 #endif
             case ACAMERA_FLASH_MODE: {
